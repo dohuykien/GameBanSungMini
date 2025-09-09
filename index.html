@@ -113,6 +113,16 @@
   let stageChosen = 1; let difficultyChosen = 'normal';
   let players = [], bullets = [], enemies = [], pickups = [], enemyBullets = [];
   let level = 1, score = 0, stars = 0, kills = 0; let lastEnemySpawn=0; let baseEnemySpawnInterval = 1000; let playerFireCooldown = 120; let bossActive=false;
+  // --- Energy & Laser globals (INSERT HERE, after score/kills) ---
+    let energy = 0;                // 0..maxEnergy (số sao tích lũy)
+    const maxEnergy = 25;          // 25 sao = full
+    let laserActive = false;       // đang bật laser không
+    let laserType = null;          // 'half' or 'full'
+    let laserTimer = 0;            // ms remaining
+    const LASER_HALF_DURATION = 2000; // ms (2s)
+    const LASER_FULL_DURATION = 4000; // ms (4s, bạn có thể đổi 3000..5000)
+    let lastFrameTime = performance.now(); // để tính dt trong update()
+
 
   const DIFFICULTY_MAP = { easy:{hpMul:0.5,spawnMul:1.3,dmgMul:0.8,bossHpMul:0.8,bossShootMul:0.7}, normal:{hpMul:1,spawnMul:1,dmgMul:1,bossHpMul:1,bossShootMul:1}, hard:{hpMul:1.18,spawnMul:0.85,dmgMul:1.12,bossHpMul:1.25,bossShootMul:1.3} };
   const COOP_HP_MULT = 1.5, COOP_SPAWN_MULT = 0.85; const VARIANT_HP = { orange:0.9, red:1.25, purple:1.9 };
@@ -134,6 +144,21 @@
   function setVolume(v){ volume=v; if(masterGain) masterGain.gain.value=v/100; document.getElementById('volLabel').textContent=Math.round(v); }
   function playShoot(){ if(!audioEnabled) return; ensureAudio(); const t=audioCtx.currentTime; const o=audioCtx.createOscillator(); const g=audioCtx.createGain(); o.type='sine'; o.frequency.value=900+Math.random()*220; g.gain.value=0.06*(volume/70); o.connect(g); g.connect(masterGain); o.start(t); g.gain.exponentialRampToValueAtTime(0.001,t+0.08); o.stop(t+0.09); }
   function playExplosion(){ if(!audioEnabled) return; ensureAudio(); const ctxA=audioCtx; const buffer=ctxA.createBuffer(1,ctxA.sampleRate*0.12,ctxA.sampleRate); const data=buffer.getChannelData(0); for(let i=0;i<data.length;i++) data[i]=(Math.random()*2-1)*(1-i/data.length); const src=ctxA.createBufferSource(); src.buffer=buffer; const g=ctxA.createGain(); src.connect(g); g.connect(masterGain); g.gain.value=0.2*(volume/70); src.start(); src.stop(ctxA.currentTime+0.12); }
+  function playLaserSound(){
+  if(!audioEnabled) return;
+  ensureAudio();
+  const t = audioCtx.currentTime;
+  const o = audioCtx.createOscillator();
+  const g = audioCtx.createGain();
+  o.type = 'sawtooth';
+  o.frequency.value = 600;
+  g.gain.value = 0.04 * (volume/70);
+  o.connect(g); g.connect(masterGain);
+  o.start(t);
+  g.gain.exponentialRampToValueAtTime(0.001, t + 0.12);
+  o.stop(t + 0.13);
+}
+
   function startBossMusic(){ if(!audioEnabled) return; ensureAudio(); if(bossMusicObj) return; const ctxA=audioCtx; const osc=ctxA.createOscillator(); const gain=ctxA.createGain(); osc.type='sawtooth'; osc.frequency.value=110; gain.gain.value=0.02*(volume/70); osc.connect(gain); gain.connect(masterGain); osc.start(); let step=0; const notes=[110,138.59,164.81,207.65]; const id=setInterval(()=>{ osc.frequency.linearRampToValueAtTime(notes[step%notes.length], ctxA.currentTime+0.05); step++; },300); bossMusicObj={osc,gain,id}; }
   function stopBossMusic(){ if(!bossMusicObj) return; bossMusicObj.osc.stop(); clearInterval(bossMusicObj.id); bossMusicObj=null; }
 
@@ -152,6 +177,20 @@
     // Enter and NumpadEnter -> P2 shoot when coop, else P1
     if(code==='Enter' || code==='NumpadEnter'){ if(mode==='coop'){ input2.shoot=true; } else { input1.shoot=true; } e.preventDefault(); }
     if(code==='KeyP') togglePause(); if(code==='KeyR') restartFromKey();
+    // Laser keys: X = short beam (needs >=10), Z = full-screen (needs full 25)
+    if(code === 'KeyX'){
+    if(!laserActive && energy >= 10 && gameState === 'running'){
+        energy = Math.max(0, energy - 10);
+        activateLaser('half');
+    }
+    }
+    if(code === 'KeyZ'){
+    if(!laserActive && energy >= maxEnergy && gameState === 'running'){
+        energy = 0;
+        activateLaser('full');
+    }
+    }
+
   });
   window.addEventListener('keyup',(e)=>{ const code=e.code; if(code==='KeyW') input1.up=false; if(code==='KeyS') input1.down=false; if(code==='KeyA') input1.left=false; if(code==='KeyD') input1.right=false; if(code==='Space') input1.shoot=false; if(code==='ArrowUp'){ if(mode==='single') input1.up=false; else input2.up=false; } if(code==='ArrowDown'){ if(mode==='single') input1.down=false; else input2.down=false; } if(code==='ArrowLeft'){ if(mode==='single') input1.left=false; else input2.left=false; } if(code==='ArrowRight'){ if(mode==='single') input1.right=false; else input2.right=false; } if(code==='Enter' || code==='NumpadEnter'){ if(mode==='coop') input2.shoot=false; else input1.shoot=false; } });
 
@@ -200,7 +239,7 @@
   function roundRect(ctx,x,y,w,h,r,fill){ ctx.beginPath(); ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r); ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath(); if(fill) ctx.fill(); else ctx.stroke(); }
 
   // Spawn rules
-  function getBossKillThreshold(){ return Math.max(30, 10 - (stageChosen - 1) * 25); }
+  function getBossKillThreshold(){ return Math.max(30, 100 - (stageChosen - 1) * 25); }
 
   function spawnEnemy(){ const w=32+randInt(20); const x=randInt(WIDTH-w); const y=-40; let baseHp=Math.floor((30+level*6+randInt(12))*DIFFICULTY_MAP[difficultyChosen].hpMul*(1+(stageChosen-1)*0.15)); let dy=0.8+Math.min(3,Math.floor(level/6)); const scoreValue=2+level; let contactDamage=Math.floor((14+level*2)*DIFFICULTY_MAP[difficultyChosen].dmgMul);
     if(mode==='coop') baseHp=Math.floor(baseHp*COOP_HP_MULT);
@@ -211,11 +250,21 @@
   }
 
   function spawnBoss(){ enemies=[]; const baseBossHp=Math.floor(1800*(1+0.45*(stageChosen-1))*DIFFICULTY_MAP[difficultyChosen].bossHpMul*(mode==='coop'?1.6:1)); const shootInterval=Math.max(300,Math.floor(800/(DIFFICULTY_MAP[difficultyChosen].bossShootMul))); enemies.push(new Boss(WIDTH/2-80,-160,baseBossHp,shootInterval)); bossActive=true; if(audioEnabled) startBossMusic(); }
+  function activateLaser(type){
+  if(laserActive) return;
+  laserActive = true;
+  laserType = type;
+  laserTimer = (type === 'half') ? LASER_HALF_DURATION : LASER_FULL_DURATION;
+  if(audioEnabled) playLaserSound();
+}
+
 
   // Shooting & update
   const lastShot={p1:0,p2:0}; function fireBulletFor(playerIndex){ const p=players[playerIndex-1]; if(!p||!p.alive) return; const owner=playerIndex; const color=owner===1?'rgb(255,240,120)':'rgb(120,255,210)'; bullets.push(new Bullet(Math.floor(p.x+p.w/2)-3,p.y-10,-11,12,0,owner,color)); if(level>=4){ bullets.push(new Bullet(p.x+8,p.y,-11,10,-1.2,owner,color)); bullets.push(new Bullet(p.x+p.w-16,p.y,-11,10,1.2,owner,color)); } if(audioEnabled) playShoot(); }
 
-  function update(now){ if(gameState!=='running') return; const spawnInterval=Math.max(380,Math.floor(baseEnemySpawnInterval*DIFFICULTY_MAP[difficultyChosen].spawnMul*(mode==='coop'?COOP_SPAWN_MULT:1)*(0.95-(stageChosen-1)*0.06)-(level-1)*12));
+  function update(now){ if(gameState!=='running') return;const dt = Math.max(0, now - (lastFrameTime || now)); // ms since last update
+lastFrameTime = now;
+ const spawnInterval=Math.max(380,Math.floor(baseEnemySpawnInterval*DIFFICULTY_MAP[difficultyChosen].spawnMul*(mode==='coop'?COOP_SPAWN_MULT:1)*(0.95-(stageChosen-1)*0.06)-(level-1)*12));
     if(!bossActive && now-lastEnemySpawn>=spawnInterval){ spawnEnemy(); lastEnemySpawn=now; }
     // update players
     if(players[0]) players[0].update(input1);
@@ -230,10 +279,83 @@
     for(let i=enemyBullets.length-1;i>=0;i--){ const b=enemyBullets[i]; b.update(); if(!b.alive){ enemyBullets.splice(i,1); } else { for(const pl of players){ if(pl && pl.alive && rectsIntersect(pl.bounds(), b.bounds())){ pl.hp-=Math.floor(10*DIFFICULTY_MAP[difficultyChosen].dmgMul); if(pl.hp<0) pl.hp=0; b.alive=false; enemyBullets.splice(i,1); break; } } } }
     // bullets vs enemies
     for(let i=enemies.length-1;i>=0;i--){ const en=enemies[i]; const er=en.bounds(); let killed=false; for(let j=bullets.length-1;j>=0;j--){ const b=bullets[j]; if(rectsIntersect(er,b.bounds())){ en.hp-=b.damage; b.alive=false; bullets.splice(j,1); if(en.hp<=0){ score+=en.score; kills++; if(randInt(3)===0) stars++; const drop=randInt(100); if(drop<20) pickups.push(new Pickup(en.x+en.w/2-6,en.y,'HEART')); else if(drop<45) pickups.push(new Pickup(en.x+en.w/2-6,en.y,'STAR')); en.alive=false; killed=true; if(audioEnabled) playExplosion(); break; } } } if(killed) enemies.splice(i,1); }
+    // Laser damage (applies after bullet collisions)
+    if(laserActive){
+  const dmgPerSec = (laserType === 'half') ? 220 : 120; // bạn có thể điều chỉnh
+  const dmgThisFrame = dmgPerSec * (dt / 1000);
+
+  if(laserType === 'full'){
+    // full-screen: áp dụng cho tất cả kẻ địch
+    for(let i=enemies.length-1;i>=0;i--){
+      const en = enemies[i];
+      if(!en || !en.alive) continue;
+      en.hp -= dmgThisFrame;
+      if(en.hp <= 0){
+        score += en.score;
+        kills++;
+        const drop = randInt(100);
+        if(drop < 20) pickups.push(new Pickup(en.x+en.w/2-6, en.y, 'HEART'));
+        else if(drop < 45) pickups.push(new Pickup(en.x+en.w/2-6, en.y, 'STAR'));
+        en.alive = false;
+        if(audioEnabled) playExplosion();
+      }
+    }
+  } else if(laserType === 'half'){
+    // narrow beam from each alive player
+    for(const pl of players){
+      if(!pl || !pl.alive) continue;
+      const beamW = 20;
+      const beamRect = { x: pl.x + pl.w/2 - beamW/2, y: 0, w: beamW, h: pl.y };
+      for(let i=enemies.length-1;i>=0;i--){
+        const en = enemies[i];
+        if(!en || !en.alive) continue;
+        if(rectsIntersect(beamRect, en.bounds())){
+          en.hp -= dmgThisFrame;
+          if(en.hp <= 0){
+            score += en.score;
+            kills++;
+            const drop = randInt(100);
+            if(drop < 20) pickups.push(new Pickup(en.x+en.w/2-6, en.y, 'HEART'));
+            else if(drop < 45) pickups.push(new Pickup(en.x+en.w/2-6, en.y, 'STAR'));
+            en.alive = false;
+            if(audioEnabled) playExplosion();
+          }
+        }
+      }
+    }
+  }
+
+  laserTimer -= dt;
+  if(laserTimer <= 0){
+    laserActive = false;
+    laserType = null;
+  }
+
+  // remove dead enemies right away
+  for(let i=enemies.length-1;i>=0;i--){
+    if(!enemies[i].alive) enemies.splice(i,1);
+  }
+}
+
     // enemy contact
     for(const pl of players){ if(!pl||!pl.alive) continue; const pr=pl.bounds(); for(let i=enemies.length-1;i>=0;i--){ const en=enemies[i]; if(rectsIntersect(pr,en.bounds())){ pl.hp-=Math.floor(en.contactDamage*DIFFICULTY_MAP[difficultyChosen].dmgMul); if(pl.hp<0) pl.hp=0; en.alive=false; enemies.splice(i,1); if(audioEnabled) playExplosion(); if(pl.hp<=0){ pl.alive=false; } } } }
     // pickups
-    for(let i=pickups.length-1;i>=0;i--){ const p=pickups[i]; for(const pl of players){ if(pl && pl.alive && rectsIntersect(pl.bounds(), p.bounds())){ if(p.type==='HEART') pl.hp=Math.min(pl.hp+20,100); else if(p.type==='STAR') stars++; p.alive=false; pickups.splice(i,1); break; } } }
+    for(let i=pickups.length-1;i>=0;i--){
+        const p = pickups[i];
+        for(const pl of players){
+            if(pl && pl.alive && rectsIntersect(pl.bounds(), p.bounds())){
+            if(p.type === 'HEART') {
+                pl.hp = Math.min(pl.hp + 20, 100);
+            } else if(p.type === 'STAR') {
+                stars++;
+                energy = Math.min(maxEnergy, energy + 1); // mỗi sao tăng 1 energy
+            }
+            p.alive = false;
+            pickups.splice(i,1);
+            break;
+            }
+        }
+    }
     const newLevel=1+Math.floor(score/20); if(newLevel!==level){ level=newLevel; playerFireCooldown=Math.max(60,Math.floor(120-(level-1)*5)); }
     if(!bossActive && kills>=getBossKillThreshold()){ spawnBoss(); kills=0; bossActive=true; }
     if(bossActive){ const bossExists=enemies.some(en=>en instanceof Boss); if(!bossExists){ bossActive=false; stopBossMusic(); endGame("win");
@@ -244,8 +366,52 @@
 
   // Draw
   function drawStarfield(ctx,t){ ctx.fillStyle='rgba(255,255,255,0.85)'; for(let i=0;i<40;i++){ const x=(t/2 + i*100) % WIDTH; const y=(t/4 + i*50) % HEIGHT; ctx.fillRect(x,y,2,2); } }
-  function drawHUD(ctx){ ctx.fillStyle='white'; ctx.font='16px Consolas, monospace'; if(players[0]) ctx.fillText('P1 HP: '+Math.max(0,Math.floor(players[0].hp)),14,24); ctx.fillText('Score: '+score,14,44); ctx.fillText('Stars: '+stars,14,64); if(mode==='coop'&&players[1]) ctx.fillText('P2 HP: '+Math.max(0,Math.floor(players[1].hp)),WIDTH-140,24); ctx.fillText('Level: '+level,WIDTH-110,44); }
-  function draw(now){ ctx.clearRect(0,0,WIDTH,HEIGHT); drawStarfield(ctx,now); for(const p of pickups) p.draw(ctx); for(const b of bullets) b.draw(ctx); for(const b of enemyBullets) b.draw(ctx); for(const en of enemies) en.draw(ctx); for(const pl of players) if(pl) pl.draw(ctx); drawHUD(ctx); }
+  function drawHUD(ctx){
+    ctx.fillStyle='white';
+    ctx.font='16px Consolas, monospace';
+    if(players[0]) ctx.fillText('P1 HP: '+Math.max(0,Math.floor(players[0].hp)),14,24);
+    ctx.fillText('Score: '+score,14,44);
+    ctx.fillText('Stars: '+stars,14,64);
+    if(mode==='coop'&&players[1]) ctx.fillText('P2 HP: '+Math.max(0,Math.floor(players[1].hp)),WIDTH-140,24);
+    ctx.fillText('Level: '+level,WIDTH-110,44);
+
+    // Kills progress to boss
+    const thresh = getBossKillThreshold();
+    ctx.fillText('Kills: '+kills+' / '+thresh, WIDTH-150, 64);
+
+    // Energy bar
+    const bx = 14, by = 78, bw = 160, bh = 10;
+    ctx.fillStyle = 'rgba(255,255,255,0.06)';
+    ctx.fillRect(bx, by, bw, bh);
+    ctx.fillStyle = 'rgba(30,220,255,0.85)';
+    const fillW = Math.floor((energy / maxEnergy) * bw);
+    ctx.fillRect(bx, by, fillW, bh);
+    ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+    ctx.strokeRect(bx, by, bw, bh);
+    ctx.fillStyle = 'white';
+    ctx.font = '12px Consolas, monospace';
+    ctx.fillText(energy + '/' + maxEnergy + ' Energy', bx + bw + 8, by + bh);
+}
+
+  function draw(now){ ctx.clearRect(0,0,WIDTH,HEIGHT); drawStarfield(ctx,now); for(const p of pickups) p.draw(ctx); for(const b of bullets) b.draw(ctx); for(const b of enemyBullets) b.draw(ctx); for(const en of enemies) en.draw(ctx); for(const pl of players) if(pl) pl.draw(ctx);// draw laser visuals
+    if(laserActive){
+    if(laserType === 'full'){
+        ctx.fillStyle = 'rgba(0,255,255,0.14)';
+        ctx.fillRect(0, 0, WIDTH, HEIGHT);
+        ctx.fillStyle = 'rgba(0,255,255,0.24)';
+        ctx.fillRect(0, HEIGHT/2 - 40, WIDTH, 80);
+    } else if(laserType === 'half'){
+        for(const pl of players){
+        if(!pl || !pl.alive) continue;
+        const bx = pl.x + pl.w/2 - 10;
+        ctx.fillStyle = 'rgba(0,220,255,0.18)';
+        ctx.fillRect(bx, 0, 20, pl.y);
+        ctx.fillStyle = 'rgba(0,220,255,0.26)';
+        ctx.fillRect(bx, pl.y - 6, 20, 12);
+        }
+    }
+};
+ drawHUD(ctx); }
 
   // Loop
   function loop(now){ if(gameState==='running') update(now); draw(now); requestAnimationFrame(loop); }
@@ -267,7 +433,12 @@
   function getBestScore(view){ const key=(view==='single'?HS_SINGLE:HS_COOP); const arr=getHS(key); return arr.length?arr[0].score:0; }
 
   // Game control
-  function resetGame(){ bullets=[]; enemies=[]; enemyBullets=[]; pickups=[]; level=1; score=0; stars=0; kills=0; bossActive=false; baseEnemySpawnInterval=1000; playerFireCooldown=120; lastEnemySpawn=performance.now(); players=[];
+  function resetGame(){ bullets=[]; enemies=[]; enemyBullets=[]; pickups=[]; level=1; score=0; stars=0; kills=0; bossActive=false; baseEnemySpawnInterval=1000; playerFireCooldown=120; lastEnemySpawn=performance.now(); players=[]; energy = 0;
+laserActive = false;
+laserType = null;
+laserTimer = 0;
+lastFrameTime = performance.now();
+;
     // player1
     players.push(new Player(WIDTH/2-80,HEIGHT-120,48,48,3,100,imgP1));
     // player2 (only if coop AND not touch)
@@ -300,6 +471,11 @@
   document.getElementById('gameOverOverlay').style.display = 'flex';
   updateHUDText();
   stopBossMusic();
+  // stop laser and music
+laserActive = false;
+laserType = null;
+laserTimer = 0;
+
 }
 
 
