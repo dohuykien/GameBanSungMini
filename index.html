@@ -200,7 +200,7 @@
   function roundRect(ctx,x,y,w,h,r,fill){ ctx.beginPath(); ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r); ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath(); if(fill) ctx.fill(); else ctx.stroke(); }
 
   // Spawn rules
-  function getBossKillThreshold(){ return Math.max(30, 50 - (stageChosen - 1) * 25); }
+  function getBossKillThreshold(){ return Math.max(30, 10 - (stageChosen - 1) * 25); }
 
   function spawnEnemy(){ const w=32+randInt(20); const x=randInt(WIDTH-w); const y=-40; let baseHp=Math.floor((30+level*6+randInt(12))*DIFFICULTY_MAP[difficultyChosen].hpMul*(1+(stageChosen-1)*0.15)); let dy=0.8+Math.min(3,Math.floor(level/6)); const scoreValue=2+level; let contactDamage=Math.floor((14+level*2)*DIFFICULTY_MAP[difficultyChosen].dmgMul);
     if(mode==='coop') baseHp=Math.floor(baseHp*COOP_HP_MULT);
@@ -236,13 +236,10 @@
     for(let i=pickups.length-1;i>=0;i--){ const p=pickups[i]; for(const pl of players){ if(pl && pl.alive && rectsIntersect(pl.bounds(), p.bounds())){ if(p.type==='HEART') pl.hp=Math.min(pl.hp+20,100); else if(p.type==='STAR') stars++; p.alive=false; pickups.splice(i,1); break; } } }
     const newLevel=1+Math.floor(score/20); if(newLevel!==level){ level=newLevel; playerFireCooldown=Math.max(60,Math.floor(120-(level-1)*5)); }
     if(!bossActive && kills>=getBossKillThreshold()){ spawnBoss(); kills=0; bossActive=true; }
-    if(bossActive){ const bossExists=enemies.some(en=>en instanceof Boss); if(!bossExists){ bossActive=false; stopBossMusic(); document.querySelector("#gameOverOverlay h1").textContent = "YOU WIN!";
-    document.getElementById("finalScore").textContent = score;
-
-    document.getElementById("gameOverOverlay").style.display = "flex";
+    if(bossActive){ const bossExists=enemies.some(en=>en instanceof Boss); if(!bossExists){ bossActive=false; stopBossMusic(); endGame("win");
     } }
     // game over rules
-    if(mode==='coop'){ const allDead=players.every(pl=>!pl||!pl.alive); if(allDead) gameOver(); } else { if(!players[0]||!players[0].alive) gameOver(); }
+    if(mode==='coop'){ const allDead=players.every(pl=>!pl||!pl.alive); if(allDead) endGame("lose"); } else { if(!players[0]||!players[0].alive) endGame("lose"); }
   }
 
   // Draw
@@ -282,8 +279,29 @@
 
   function togglePause(){ if(gameState==='running'){ gameState='paused'; document.getElementById('pauseOverlay').style.display='flex'; } else if(gameState==='paused'){ gameState='running'; document.getElementById('pauseOverlay').style.display='none'; } }
   function restartFromKey(){ resetGame(); gameState='running'; hideAllOverlays(); }
-  function gameOver(){ gameState='gameover'; document.getElementById('finalScore').textContent=score; document.getElementById('playerNameInput1').value=localStorage.getItem('miniShooterLastName')||'P1'; document.getElementById('playerNameInput2').value=(localStorage.getItem('miniShooterLastNameP2')||'P2'); if(mode==='single'){ document.getElementById('playerNameInput2').style.display='none'; } else { document.getElementById('playerNameInput2').style.display='inline-block'; } document.querySelector("#gameOverOverlay h1").textContent = "Game Over";
- document.getElementById('gameOverOverlay').style.display='flex'; updateHUDText(); stopBossMusic(); }
+  function endGame(type){ // type = "lose" hoặc "win"
+  gameState = 'gameover';
+  document.getElementById('finalScore').textContent = score;
+  document.getElementById('playerNameInput1').value =
+    localStorage.getItem('miniShooterLastName') || 'P1';
+  document.getElementById('playerNameInput2').value =
+    localStorage.getItem('miniShooterLastNameP2') || 'P2';
+
+  if(mode === 'single'){
+    document.getElementById('playerNameInput2').style.display = 'none';
+  } else {
+    document.getElementById('playerNameInput2').style.display = 'inline-block';
+  }
+
+  // Nếu win thì hiện YOU WIN!, còn thua thì hiện Game Over
+  document.querySelector("#gameOverOverlay h1").textContent =
+    (type === "win" ? "YOU WIN!" : "Game Over");
+
+  document.getElementById('gameOverOverlay').style.display = 'flex';
+  updateHUDText();
+  stopBossMusic();
+}
+
 
   // Events
   document.getElementById('startSingleBtn').addEventListener('click',()=>startSingle(false));
