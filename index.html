@@ -239,7 +239,7 @@
   function roundRect(ctx,x,y,w,h,r,fill){ ctx.beginPath(); ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r); ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath(); if(fill) ctx.fill(); else ctx.stroke(); }
 
   // Spawn rules
-  function getBossKillThreshold(){ return Math.max(30, 100 - (stageChosen - 1) * 25); }
+  function getBossKillThreshold(){ return Math.max(30, 10 - (stageChosen - 1) * 25); }
 
   function spawnEnemy(){ const w=32+randInt(20); const x=randInt(WIDTH-w); const y=-40; let baseHp=Math.floor((30+level*6+randInt(12))*DIFFICULTY_MAP[difficultyChosen].hpMul*(1+(stageChosen-1)*0.15)); let dy=0.8+Math.min(3,Math.floor(level/6)); const scoreValue=2+level; let contactDamage=Math.floor((14+level*2)*DIFFICULTY_MAP[difficultyChosen].dmgMul);
     if(mode==='coop') baseHp=Math.floor(baseHp*COOP_HP_MULT);
